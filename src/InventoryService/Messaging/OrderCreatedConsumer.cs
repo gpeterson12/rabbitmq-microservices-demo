@@ -1,0 +1,157 @@
+using System.Text.Json;
+using InventoryService.Models;
+using InventoryService.Services;
+using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
+
+namespace InventoryService.Messaging;
+
+public sealed class OrderCreatedConsumer(
+    IRabbitMqConnectionFactory connectionFactory,
+    IRabbitMqPublisher publisher,
+    IStockTable stockTable,
+    ILogger<OrderCreatedConsumer> logger) : BackgroundService
+{
+    private const int PrefetchCount = 10;
+    private const int MinProcessingDelayMilliseconds = 300;
+    private const int MaxProcessingDelayMilliseconds = 800;
+
+    private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        var connection = await connectionFactory.CreateConnectionAsync(stoppingToken);
+        var channel = await connection.CreateChannelAsync(cancellationToken: stoppingToken);
+
+        await DeclareTopologyAsync(channel, stoppingToken);
+
+        await channel.BasicQosAsync(prefetchSize: 0, prefetchCount: PrefetchCount, global: false, stoppingToken);
+
+        var consumer = new AsyncEventingBasicConsumer(channel);
+        consumer.ReceivedAsync += (_, message) => HandleMessageAsync(channel, message, stoppingToken);
+
+        await channel.BasicConsumeAsync(InventoryTopology.OrderCreatedQueue, autoAck: false, consumer, stoppingToken);
+        logger.LogInformation("Consuming '{Queue}' with prefetch count {PrefetchCount}",
+            InventoryTopology.OrderCreatedQueue, PrefetchCount);
+
+        try
+        {
+            await Task.Delay(Timeout.Infinite, stoppingToken);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            await channel.DisposeAsync();
+            await connection.DisposeAsync();
+        }
+    }
+
+    private async Task DeclareTopologyAsync(IChannel channel, CancellationToken stoppingToken)
+    {
+        await channel.ExchangeDeclareAsync(InventoryTopology.TopicExchange, ExchangeType.Topic,
+            durable: true, autoDelete: false, cancellationToken: stoppingToken);
+
+        await channel.ExchangeDeclareAsync(InventoryTopology.DeadLetterExchange, ExchangeType.Fanout,
+            durable: true, autoDelete: false, cancellationToken: stoppingToken);
+
+        await channel.QueueDeclareAsync(InventoryTopology.OrderCreatedQueue, durable: true, exclusive: false,
+            autoDelete: false,
+            arguments: new Dictionary<string, object?>
+            {
+                ["x-dead-letter-exchange"] = InventoryTopology.DeadLetterExchange,
+            },
+            cancellationToken: stoppingToken);
+
+        await channel.QueueBindAsync(InventoryTopology.OrderCreatedQueue, InventoryTopology.TopicExchange,
+            OrderCreatedEvent.RoutingKey, cancellationToken: stoppingToken);
+
+        await channel.QueueBindAsync(InventoryTopology.DeadLetterQueue, InventoryTopology.DeadLetterExchange,
+            string.Empty, cancellationToken: stoppingToken);
+
+        logger.LogInformation(
+            "Declared queue '{Queue}' bound to '{TopicExchange}' on '{RoutingKey}' with x-dead-letter-exchange '{DeadLetterExchange}', and dead-letter queue '{DeadLetterQueue}' bound to '{DeadLetterExchange}'",
+            InventoryTopology.OrderCreatedQueue, InventoryTopology.TopicExchange,
+            OrderCreatedEvent.RoutingKey, InventoryTopology.DeadLetterExchange,
+            InventoryTopology.DeadLetterQueue, InventoryTopology.DeadLetterExchange);
+    }
+
+    private async Task HandleMessageAsync(IChannel channel, BasicDeliverEventArgs message,
+        CancellationToken stoppingToken)
+    {
+        try
+        {
+            await Task.Delay(Random.Shared.Next(MinProcessingDelayMilliseconds, MaxProcessingDelayMilliseconds),
+                stoppingToken);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        OrderCreatedEvent? orderCreated;
+        try
+        {
+            orderCreated = JsonSerializer.Deserialize<OrderCreatedEvent>(message.Body.Span, SerializerOptions);
+        }
+        catch (JsonException)
+        {
+            orderCreated = null;
+        }
+
+        if (orderCreated is null || orderCreated.OrderId == Guid.Empty
+            || string.IsNullOrWhiteSpace(orderCreated.Sku) || orderCreated.Quantity <= 0)
+        {
+            logger.LogWarning(
+                "Malformed order.created message (delivery tag {DeliveryTag}) failed schema validation, dead-lettering via exchange '{DeadLetterExchange}'",
+                message.DeliveryTag, InventoryTopology.DeadLetterExchange);
+
+            await channel.BasicNackAsync(message.DeliveryTag, multiple: false, requeue: false, stoppingToken);
+            return;
+        }
+
+        var outcome = stockTable.Reserve(orderCreated.Sku, orderCreated.Quantity);
+
+        switch (outcome.Status)
+        {
+            case ReserveStatus.Reserved:
+                await publisher.PublishAsync(new OrderReservedEvent
+                {
+                    EventId = Guid.NewGuid(),
+                    EventType = OrderReservedEvent.EventTypeValue,
+                    OccurredAt = DateTimeOffset.UtcNow,
+                    OrderId = orderCreated.OrderId,
+                    Sku = orderCreated.Sku,
+                    Quantity = orderCreated.Quantity,
+                    RemainingStock = outcome.RemainingStock,
+                }, OrderReservedEvent.RoutingKey, stoppingToken);
+
+                logger.LogInformation("Order {OrderId} reserved {Sku} x{Quantity}, {RemainingStock} left in stock",
+                    orderCreated.OrderId, orderCreated.Sku, orderCreated.Quantity, outcome.RemainingStock);
+                break;
+
+            case ReserveStatus.UnknownSku:
+            case ReserveStatus.InsufficientStock:
+                var reason = outcome.Status == ReserveStatus.UnknownSku
+                    ? OrderRejectedEvent.ReasonUnknownSku
+                    : OrderRejectedEvent.ReasonInsufficientStock;
+
+                await publisher.PublishAsync(new OrderRejectedEvent
+                {
+                    EventId = Guid.NewGuid(),
+                    EventType = OrderRejectedEvent.EventTypeValue,
+                    OccurredAt = DateTimeOffset.UtcNow,
+                    OrderId = orderCreated.OrderId,
+                    Sku = orderCreated.Sku,
+                    Reason = reason,
+                }, OrderRejectedEvent.RoutingKey, stoppingToken);
+
+                logger.LogInformation("Order {OrderId} rejected ({Reason}) for {Sku} x{Quantity}",
+                    orderCreated.OrderId, reason, orderCreated.Sku, orderCreated.Quantity);
+                break;
+        }
+
+        await channel.BasicAckAsync(message.DeliveryTag, multiple: false, stoppingToken);
+    }
+}
