@@ -1,0 +1,19 @@
+# This file is merged automatically by `docker compose` on top of
+# docker-compose.yml. It ships as a no-op (comments only) so the default
+# `docker compose up --build` publishes inventory-service on
+# localhost:5002.
+#
+# To demonstrate competing consumers, uncomment the two lines at the
+# bottom to remove the fixed host port mapping, then run:
+#
+#   docker compose up --build --scale inventory-service=3
+#
+# Replicas then share the queue `inventory.order-created` round-robin and
+# are distinguishable in logs by their container hostname. The tradeoff:
+# without a fixed port mapping, individual replicas are no longer
+# reachable from the host (GET /stock included). Requires Docker Compose
+# v2.24+ for the !reset tag.
+
+# services:
+#   inventory-service:
+#     ports: !reset []

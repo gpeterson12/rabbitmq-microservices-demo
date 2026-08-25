@@ -1,0 +1,14 @@
+.git
+.gitignore
+.editorconfig
+.dockerignore
+docker-compose*.yml
+LICENSE
+**/*.md
+**/bin/
+**/obj/
+tests/
+docs/
+.opencode/
+**/.DS_Store
+**/Properties/launchSettings.json
