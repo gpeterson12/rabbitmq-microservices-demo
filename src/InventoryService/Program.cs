@@ -17,6 +17,7 @@ builder.Services.Configure<ConsumingOptions>(builder.Configuration.GetSection(Co
 builder.Services.AddSingleton<IRabbitMqConnectionFactory, RabbitMqConnectionFactory>();
 builder.Services.AddSingleton<IRabbitMqPublisher, RabbitMqPublisher>();
 builder.Services.AddSingleton<IStockTable, StockTable>();
+builder.Services.AddSingleton<IProcessedOrderTable>(_ => new ProcessedOrderTable());
 builder.Services.AddHostedService<RabbitMqPublisherInitializer>();
 builder.Services.AddHostedService<OrderCreatedConsumer>();
 

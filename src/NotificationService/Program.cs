@@ -16,6 +16,7 @@ builder.Services.Configure<RabbitMqOptions>(builder.Configuration.GetSection("Ra
 builder.Services.Configure<ConsumingOptions>(builder.Configuration.GetSection(ConsumingOptions.SectionName));
 builder.Services.AddSingleton<IRabbitMqConnectionFactory, RabbitMqConnectionFactory>();
 builder.Services.AddSingleton<INotificationLog, NotificationLog>();
+builder.Services.AddSingleton<IProcessedEventTable>(_ => new ProcessedEventTable());
 builder.Services.AddHostedService<OrderReservedConsumer>();
 builder.Services.AddHostedService<OrderRejectedConsumer>();
 

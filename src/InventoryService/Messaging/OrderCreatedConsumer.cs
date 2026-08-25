@@ -11,6 +11,7 @@ public sealed class OrderCreatedConsumer(
     IRabbitMqConnectionFactory connectionFactory,
     IRabbitMqPublisher publisher,
     IStockTable stockTable,
+    IProcessedOrderTable processedOrders,
     IOptions<ConsumingOptions> consumingOptions,
     ILogger<OrderCreatedConsumer> logger) : BackgroundService
 {
@@ -126,6 +127,16 @@ public sealed class OrderCreatedConsumer(
                 message.DeliveryTag, InventoryTopology.DeadLetterExchange);
 
             await channel.BasicNackAsync(message.DeliveryTag, multiple: false, requeue: false, stoppingToken);
+            return;
+        }
+
+        if (!processedOrders.TryMark(orderCreated.OrderId))
+        {
+            logger.LogInformation(
+                "Duplicate order.created for order {OrderId} (delivery tag {DeliveryTag}) already processed, acknowledging without reprocessing",
+                orderCreated.OrderId, message.DeliveryTag);
+
+            await channel.BasicAckAsync(message.DeliveryTag, multiple: false, stoppingToken);
             return;
         }
 

@@ -10,6 +10,7 @@ namespace NotificationService.Messaging;
 public sealed class OrderReservedConsumer(
     IRabbitMqConnectionFactory connectionFactory,
     INotificationLog notificationLog,
+    IProcessedEventTable processedEvents,
     IOptions<ConsumingOptions> consumingOptions,
     ILogger<OrderReservedConsumer> logger)
     : RabbitMqConsumerBase(connectionFactory, consumingOptions, logger)
@@ -35,6 +36,16 @@ public sealed class OrderReservedConsumer(
             logger.LogError(
                 "Discarding malformed {EventType} message (delivery tag {DeliveryTag}): deserialization or schema validation failed",
                 OrderReservedEvent.EventTypeValue, message.DeliveryTag);
+
+            await channel.BasicAckAsync(message.DeliveryTag, multiple: false, stoppingToken);
+            return;
+        }
+
+        if (!processedEvents.TryMark(reserved.EventId))
+        {
+            logger.LogInformation(
+                "Duplicate {EventType} event {EventId} (delivery tag {DeliveryTag}) already processed, acknowledging without recording",
+                OrderReservedEvent.EventTypeValue, reserved.EventId, message.DeliveryTag);
 
             await channel.BasicAckAsync(message.DeliveryTag, multiple: false, stoppingToken);
             return;
