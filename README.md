@@ -235,6 +235,21 @@ Deliberately not implemented, so nobody goes looking for them:
 - Distributed tracing (OpenTelemetry would be a natural follow-up)
 - Kubernetes manifests (docker-compose only)
 
+## Known limitations
+
+Performance-oriented gaps a production deployment would close, left as-is
+on purpose:
+
+- **No queue length limits / broker backpressure** (`x-max-length` +
+  `overflow=reject-publish` absent) — demo traffic never saturates the
+  broker, and publisher confirms already surface any broker-side failure.
+- **Single shared publisher channel per service** (no channel pool or
+  publish retry) — one channel comfortably covers demo throughput, and a
+  pool would add machinery that obscures the messaging patterns.
+- **Synchronous console logging at Information per message** — the
+  human-readable `docker compose logs -f` narrative is a deliverable;
+  async buffering trades log immediacy for throughput.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
