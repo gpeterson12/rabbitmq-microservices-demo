@@ -64,6 +64,9 @@ public sealed class OrderCreatedConsumer(
             },
             cancellationToken: stoppingToken);
 
+        await channel.QueueDeclareAsync(InventoryTopology.DeadLetterQueue, durable: true, exclusive: false,
+            autoDelete: false, cancellationToken: stoppingToken);
+
         await channel.QueueBindAsync(InventoryTopology.OrderCreatedQueue, InventoryTopology.TopicExchange,
             OrderCreatedEvent.RoutingKey, cancellationToken: stoppingToken);
 
