@@ -11,6 +11,37 @@ messages route to `orders.dead-letter` for inspection). There is no
 database, no auth, no UI — state lives in memory so the messaging
 behavior stays the star of `docker compose logs -f`.
 
+## How this was built
+
+This repo was built with an agentic coding workflow (opencode) rather
+than written by hand, and the process artifacts are left in the repo
+on purpose:
+
+- **[SPEC.md](SPEC.md)** — the detailed spec given to the agent before
+  any code was written: architecture, event schemas, exchange/queue
+  topology, and explicit out-of-scope boundaries.
+- **[AGENTS.md](AGENTS.md)** — standing project instructions the agent
+  reads every session: stack conventions, failure-semantics rules,
+  and workflow guidance (phase-by-phase builds with a commit after
+  each phase).
+- **[.opencode/agent/](.opencode/agent/)** — two subagents used for
+  review passes after the initial build: `reviewer` checked the
+  finished code against SPEC.md for architectural drift, and
+  `perf-reviewer` did two rounds of concurrency/scalability review
+  aimed specifically at behavior under load (not just steady-state
+  throughput). Both surfaced real, fixed issues — see the commit
+  history for `S1`/`S2` and the earlier prefetch/dispatch-concurrency
+  fixes.
+
+The build itself was staged: plan mode first for each phase, review
+of the plan before approving, then build with a commit per phase, so
+each step is inspectable in `git log` rather than one large diff.
+Findings from both reviewers were triaged manually, not applied
+automatically; several suggestions (e.g. broker-side backpressure,
+channel pooling) were deliberately left as documented tradeoffs
+rather than implemented, to keep the repo's core purpose (showcasing
+the messaging patterns) legible.
+
 ## Architecture
 
 ```mermaid
@@ -38,11 +69,11 @@ See [docs/architecture.md](docs/architecture.md) for the full exchange/
 queue topology, event schemas, failure semantics, and which service
 declares which topology pieces.
 
-| Service              | Host port | Endpoints |
-|----------------------|-----------|-----------|
-| OrderService         | 5001      | `POST /orders`, `GET /health` |
-| InventoryService     | 5002      | `GET /stock`, `GET /health`   |
-| NotificationService  | 5003      | `GET /notifications`, `GET /health` |
+| Service             | Host port | Endpoints                           |
+| ------------------- | --------- | ----------------------------------- |
+| OrderService        | 5001      | `POST /orders`, `GET /health`       |
+| InventoryService    | 5002      | `GET /stock`, `GET /health`         |
+| NotificationService | 5003      | `GET /notifications`, `GET /health` |
 
 ## Prerequisites
 
@@ -151,7 +182,7 @@ curl -u guest:guest -X POST \
 ```
 
 Note that business rejections (unknown SKU / insufficient stock) do
-*not* dead-letter — those are normal domain outcomes published as
+_not_ dead-letter — those are normal domain outcomes published as
 `order.rejected`. Only malformed messages end up in the DLQ.
 
 ## Scaling InventoryService (competing consumers)
@@ -183,12 +214,12 @@ the round-robin split obvious:
 Consumers are configured via the `Consuming` section (env-var form:
 `Consuming__<Property>`), applied by both consuming services:
 
-| Setting | Default | Purpose |
-|---------|---------|---------|
-| `PrefetchCount` | 16 | Unacked messages fetched per consumer; keep ≥ dispatch concurrency |
-| `ConsumerDispatchConcurrency` | 8 | Concurrent deliveries processed per channel (1 = strict sequential) |
-| `SimulatedProcessingDelayEnabled` | `true` | **Demo-only** artificial latency so round-robin splitting is visible in logs |
-| `MinProcessingDelayMilliseconds` / `MaxProcessingDelayMilliseconds` | 300 / 800 | Delay range used when the simulated delay is enabled |
+| Setting                                                             | Default   | Purpose                                                                      |
+| ------------------------------------------------------------------- | --------- | ---------------------------------------------------------------------------- |
+| `PrefetchCount`                                                     | 16        | Unacked messages fetched per consumer; keep ≥ dispatch concurrency           |
+| `ConsumerDispatchConcurrency`                                       | 8         | Concurrent deliveries processed per channel (1 = strict sequential)          |
+| `SimulatedProcessingDelayEnabled`                                   | `true`    | **Demo-only** artificial latency so round-robin splitting is visible in logs |
+| `MinProcessingDelayMilliseconds` / `MaxProcessingDelayMilliseconds` | 300 / 800 | Delay range used when the simulated delay is enabled                         |
 
 The simulated delay exists purely for the demo narrative and caps each
 replica at roughly 2 orders/second — **disable it for any load testing**:
