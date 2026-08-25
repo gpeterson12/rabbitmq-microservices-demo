@@ -17,6 +17,7 @@ services:
     build:
       context: .
       dockerfile: src/OrderService/Dockerfile
+    restart: unless-stopped
     environment:
       RabbitMq__HostName: rabbitmq
       RabbitMq__UserName: guest
@@ -31,6 +32,7 @@ services:
     build:
       context: .
       dockerfile: src/InventoryService/Dockerfile
+    restart: unless-stopped
     environment:
       RabbitMq__HostName: rabbitmq
       RabbitMq__UserName: guest
@@ -48,6 +50,7 @@ services:
     build:
       context: .
       dockerfile: src/NotificationService/Dockerfile
+    restart: unless-stopped
     environment:
       RabbitMq__HostName: rabbitmq
       RabbitMq__UserName: guest

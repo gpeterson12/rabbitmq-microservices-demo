@@ -17,24 +17,15 @@ public sealed class OrderCreatedConsumer(
 {
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
 
+    private const int InitialSetupBackoffMilliseconds = 500;
+    private const int MaxSetupBackoffMilliseconds = 30_000;
+
     private readonly ConsumingOptions _options = consumingOptions.Value;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var connection = await connectionFactory.CreateConnectionAsync(stoppingToken);
-        var channel = await connection.CreateChannelAsync(new CreateChannelOptions(
-            publisherConfirmationsEnabled: false,
-            publisherConfirmationTrackingEnabled: false,
-            consumerDispatchConcurrency: _options.ConsumerDispatchConcurrency), stoppingToken);
+        var (connection, channel) = await StartConsumingAsync(stoppingToken);
 
-        await DeclareTopologyAsync(channel, stoppingToken);
-
-        await channel.BasicQosAsync(prefetchSize: 0, prefetchCount: _options.PrefetchCount, global: false, stoppingToken);
-
-        var consumer = new AsyncEventingBasicConsumer(channel);
-        consumer.ReceivedAsync += (_, message) => HandleMessageAsync(channel, message, stoppingToken);
-
-        await channel.BasicConsumeAsync(InventoryTopology.OrderCreatedQueue, autoAck: false, consumer, stoppingToken);
         logger.LogInformation("Consuming '{Queue}' with prefetch count {PrefetchCount} and dispatch concurrency {DispatchConcurrency}",
             InventoryTopology.OrderCreatedQueue, _options.PrefetchCount, _options.ConsumerDispatchConcurrency);
 
@@ -56,6 +47,61 @@ public sealed class OrderCreatedConsumer(
         {
             await channel.DisposeAsync();
             await connection.DisposeAsync();
+        }
+    }
+
+    /// <summary>
+    /// Establishes the connection and registers the consumer, retrying with
+    /// exponential backoff so a transient broker failure during setup can
+    /// never propagate out of ExecuteAsync (which would stop the host).
+    /// </summary>
+    private async Task<(IConnection Connection, IChannel Channel)> StartConsumingAsync(CancellationToken stoppingToken)
+    {
+        var backoffMilliseconds = InitialSetupBackoffMilliseconds;
+
+        while (true)
+        {
+            IConnection? connection = null;
+            IChannel? channel = null;
+
+            try
+            {
+                connection = await connectionFactory.CreateConnectionAsync(stoppingToken);
+                channel = await connection.CreateChannelAsync(new CreateChannelOptions(
+                    publisherConfirmationsEnabled: false,
+                    publisherConfirmationTrackingEnabled: false,
+                    consumerDispatchConcurrency: _options.ConsumerDispatchConcurrency), stoppingToken);
+
+                await DeclareTopologyAsync(channel, stoppingToken);
+
+                await channel.BasicQosAsync(prefetchSize: 0, prefetchCount: _options.PrefetchCount, global: false, stoppingToken);
+
+                var consumer = new AsyncEventingBasicConsumer(channel);
+                consumer.ReceivedAsync += (_, message) => HandleMessageAsync(channel, message, stoppingToken);
+
+                await channel.BasicConsumeAsync(InventoryTopology.OrderCreatedQueue, autoAck: false, consumer, stoppingToken);
+
+                return (connection, channel);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !stoppingToken.IsCancellationRequested)
+            {
+                if (channel is not null)
+                {
+                    await channel.DisposeAsync();
+                }
+
+                if (connection is not null)
+                {
+                    await connection.DisposeAsync();
+                }
+
+                backoffMilliseconds = Math.Min(backoffMilliseconds * 2, MaxSetupBackoffMilliseconds);
+                logger.LogWarning(ex,
+                    "Failed to start consuming '{Queue}', retrying in {BackoffMilliseconds} ms",
+                    InventoryTopology.OrderCreatedQueue, backoffMilliseconds);
+
+                await Task.Delay(backoffMilliseconds, stoppingToken);
+            }
         }
     }
 

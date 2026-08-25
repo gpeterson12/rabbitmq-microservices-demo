@@ -25,6 +25,9 @@ public sealed class RabbitMqPublisher(IRabbitMqConnectionFactory connectionFacto
 {
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
 
+    private const int InitialSetupBackoffMilliseconds = 500;
+    private const int MaxSetupBackoffMilliseconds = 30_000;
+
     private readonly IRabbitMqConnectionFactory _connectionFactory = connectionFactory;
     private readonly ILogger<RabbitMqPublisher> _logger = logger;
 
@@ -33,6 +36,14 @@ public sealed class RabbitMqPublisher(IRabbitMqConnectionFactory connectionFacto
 
     public bool IsConnected => _channel is { IsOpen: true };
 
+    /// <summary>
+    /// Establishes the connection and confirm-enabled publish channel,
+    /// retrying with exponential backoff so a transient broker failure
+    /// during setup can never propagate out of the hosted initializer
+    /// (which would stop the host). Connection/channel fields are assigned
+    /// only after setup fully succeeds, so a failed attempt can never leave
+    /// a partially initialized publisher behind.
+    /// </summary>
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
         if (_connection is not null)
@@ -40,13 +51,47 @@ public sealed class RabbitMqPublisher(IRabbitMqConnectionFactory connectionFacto
             return;
         }
 
-        _connection = await _connectionFactory.CreateConnectionAsync(cancellationToken);
+        var backoffMilliseconds = InitialSetupBackoffMilliseconds;
 
-        _channel = await _connection.CreateChannelAsync(new CreateChannelOptions(
-            publisherConfirmationsEnabled: true,
-            publisherConfirmationTrackingEnabled: true), cancellationToken);
+        while (true)
+        {
+            IConnection? connection = null;
+            IChannel? channel = null;
 
-        await DeclareTopologyAsync(_channel, cancellationToken);
+            try
+            {
+                connection = await _connectionFactory.CreateConnectionAsync(cancellationToken);
+
+                channel = await connection.CreateChannelAsync(new CreateChannelOptions(
+                    publisherConfirmationsEnabled: true,
+                    publisherConfirmationTrackingEnabled: true), cancellationToken);
+
+                await DeclareTopologyAsync(channel, cancellationToken);
+
+                _connection = connection;
+                _channel = channel;
+                return;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                if (channel is not null)
+                {
+                    await channel.DisposeAsync();
+                }
+
+                if (connection is not null)
+                {
+                    await connection.DisposeAsync();
+                }
+
+                backoffMilliseconds = Math.Min(backoffMilliseconds * 2, MaxSetupBackoffMilliseconds);
+                _logger.LogWarning(ex,
+                    "Failed to initialize RabbitMQ publisher, retrying in {BackoffMilliseconds} ms",
+                    backoffMilliseconds);
+
+                await Task.Delay(backoffMilliseconds, cancellationToken);
+            }
+        }
     }
 
     private async Task DeclareTopologyAsync(IChannel channel, CancellationToken cancellationToken)
