@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.Options;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 
@@ -11,12 +12,15 @@ internal static class NotificationsTopology
     public const string OrderRejectedQueue = "notification.order-rejected";
 }
 
-public abstract class RabbitMqConsumerBase(IRabbitMqConnectionFactory connectionFactory, ILogger logger)
+public abstract class RabbitMqConsumerBase(
+    IRabbitMqConnectionFactory connectionFactory,
+    IOptions<ConsumingOptions> consumingOptions,
+    ILogger logger)
     : BackgroundService
 {
-    private const int PrefetchCount = 10;
-
     protected static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
+
+    private readonly ConsumingOptions _options = consumingOptions.Value;
 
     protected abstract string QueueName { get; }
 
@@ -25,18 +29,21 @@ public abstract class RabbitMqConsumerBase(IRabbitMqConnectionFactory connection
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var connection = await connectionFactory.CreateConnectionAsync(stoppingToken);
-        var channel = await connection.CreateChannelAsync(cancellationToken: stoppingToken);
+        var channel = await connection.CreateChannelAsync(new CreateChannelOptions(
+            publisherConfirmationsEnabled: false,
+            publisherConfirmationTrackingEnabled: false,
+            consumerDispatchConcurrency: _options.ConsumerDispatchConcurrency), stoppingToken);
 
         await DeclareTopologyAsync(channel, stoppingToken);
 
-        await channel.BasicQosAsync(prefetchSize: 0, prefetchCount: PrefetchCount, global: false, stoppingToken);
+        await channel.BasicQosAsync(prefetchSize: 0, prefetchCount: _options.PrefetchCount, global: false, stoppingToken);
 
         var consumer = new AsyncEventingBasicConsumer(channel);
         consumer.ReceivedAsync += (_, message) => HandleMessageAsync(channel, message, stoppingToken);
 
         await channel.BasicConsumeAsync(QueueName, autoAck: false, consumer, stoppingToken);
-        logger.LogInformation("'{Consumer}' consuming '{Queue}' with prefetch count {PrefetchCount}",
-            GetType().Name, QueueName, PrefetchCount);
+        logger.LogInformation("'{Consumer}' consuming '{Queue}' with prefetch count {PrefetchCount} and dispatch concurrency {DispatchConcurrency}",
+            GetType().Name, QueueName, _options.PrefetchCount, _options.ConsumerDispatchConcurrency);
 
         try
         {

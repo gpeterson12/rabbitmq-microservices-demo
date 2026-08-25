@@ -1,6 +1,7 @@
 using System.Text.Json;
 using InventoryService.Models;
 using InventoryService.Services;
+using Microsoft.Extensions.Options;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 
@@ -10,29 +11,38 @@ public sealed class OrderCreatedConsumer(
     IRabbitMqConnectionFactory connectionFactory,
     IRabbitMqPublisher publisher,
     IStockTable stockTable,
+    IOptions<ConsumingOptions> consumingOptions,
     ILogger<OrderCreatedConsumer> logger) : BackgroundService
 {
-    private const int PrefetchCount = 10;
-    private const int MinProcessingDelayMilliseconds = 300;
-    private const int MaxProcessingDelayMilliseconds = 800;
-
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
+
+    private readonly ConsumingOptions _options = consumingOptions.Value;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var connection = await connectionFactory.CreateConnectionAsync(stoppingToken);
-        var channel = await connection.CreateChannelAsync(cancellationToken: stoppingToken);
+        var channel = await connection.CreateChannelAsync(new CreateChannelOptions(
+            publisherConfirmationsEnabled: false,
+            publisherConfirmationTrackingEnabled: false,
+            consumerDispatchConcurrency: _options.ConsumerDispatchConcurrency), stoppingToken);
 
         await DeclareTopologyAsync(channel, stoppingToken);
 
-        await channel.BasicQosAsync(prefetchSize: 0, prefetchCount: PrefetchCount, global: false, stoppingToken);
+        await channel.BasicQosAsync(prefetchSize: 0, prefetchCount: _options.PrefetchCount, global: false, stoppingToken);
 
         var consumer = new AsyncEventingBasicConsumer(channel);
         consumer.ReceivedAsync += (_, message) => HandleMessageAsync(channel, message, stoppingToken);
 
         await channel.BasicConsumeAsync(InventoryTopology.OrderCreatedQueue, autoAck: false, consumer, stoppingToken);
-        logger.LogInformation("Consuming '{Queue}' with prefetch count {PrefetchCount}",
-            InventoryTopology.OrderCreatedQueue, PrefetchCount);
+        logger.LogInformation("Consuming '{Queue}' with prefetch count {PrefetchCount} and dispatch concurrency {DispatchConcurrency}",
+            InventoryTopology.OrderCreatedQueue, _options.PrefetchCount, _options.ConsumerDispatchConcurrency);
+
+        if (_options.SimulatedProcessingDelayEnabled)
+        {
+            logger.LogInformation(
+                "Simulated processing delay is ENABLED (demo mode): {Min}-{Max} ms per message; set Consuming__SimulatedProcessingDelayEnabled=false for load testing",
+                _options.MinProcessingDelayMilliseconds, _options.MaxProcessingDelayMilliseconds);
+        }
 
         try
         {
@@ -83,14 +93,19 @@ public sealed class OrderCreatedConsumer(
     private async Task HandleMessageAsync(IChannel channel, BasicDeliverEventArgs message,
         CancellationToken stoppingToken)
     {
-        try
+        if (_options.SimulatedProcessingDelayEnabled)
         {
-            await Task.Delay(Random.Shared.Next(MinProcessingDelayMilliseconds, MaxProcessingDelayMilliseconds),
-                stoppingToken);
-        }
-        catch (OperationCanceledException)
-        {
-            return;
+            var min = Math.Max(0, _options.MinProcessingDelayMilliseconds);
+            var max = Math.Max(min, _options.MaxProcessingDelayMilliseconds);
+
+            try
+            {
+                await Task.Delay(Random.Shared.Next(min, max), stoppingToken);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
         }
 
         OrderCreatedEvent? orderCreated;

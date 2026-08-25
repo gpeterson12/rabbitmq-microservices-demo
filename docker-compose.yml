@@ -35,6 +35,9 @@ services:
       RabbitMq__HostName: rabbitmq
       RabbitMq__UserName: guest
       RabbitMq__Password: guest
+      Consuming__PrefetchCount: ${CONSUMING_PREFETCH_COUNT:-16}
+      Consuming__ConsumerDispatchConcurrency: ${CONSUMING_DISPATCH_CONCURRENCY:-8}
+      Consuming__SimulatedProcessingDelayEnabled: ${SIMULATED_PROCESSING_DELAY_ENABLED:-true}
     ports:
       - "5002:8080"
     depends_on:
@@ -49,6 +52,8 @@ services:
       RabbitMq__HostName: rabbitmq
       RabbitMq__UserName: guest
       RabbitMq__Password: guest
+      Consuming__PrefetchCount: ${CONSUMING_PREFETCH_COUNT:-16}
+      Consuming__ConsumerDispatchConcurrency: ${CONSUMING_DISPATCH_CONCURRENCY:-8}
     ports:
       - "5003:8080"
     depends_on:

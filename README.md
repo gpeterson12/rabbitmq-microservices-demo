@@ -167,13 +167,37 @@ docker compose up --build --scale inventory-service=3
 Tradeoff: without a fixed host port mapping, individual replicas are no
 longer reachable from the host (`GET /stock` included). The behavior is
 still fully observable through `docker compose logs -f` — every replica
-logs its container hostname, and the artificial 300-800 ms processing
-delay makes the round-robin split obvious:
+logs its container hostname, and the artificial processing delay makes
+the round-robin split obvious:
 
 ```
 [16:19:11 INF] (0a67abb4fb62) Order ... reserved SKU-WIDGET x1, 49 left in stock
 [16:19:12 INF] (faa7dd210d49) Order ... rejected (unknown_sku) for SKU-UNKNOWN x1
 ```
+
+### Consumer tuning
+
+Consumers are configured via the `Consuming` section (env-var form:
+`Consuming__<Property>`), applied by both consuming services:
+
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| `PrefetchCount` | 16 | Unacked messages fetched per consumer; keep ≥ dispatch concurrency |
+| `ConsumerDispatchConcurrency` | 8 | Concurrent deliveries processed per channel (1 = strict sequential) |
+| `SimulatedProcessingDelayEnabled` | `true` | **Demo-only** artificial latency so round-robin splitting is visible in logs |
+| `MinProcessingDelayMilliseconds` / `MaxProcessingDelayMilliseconds` | 300 / 800 | Delay range used when the simulated delay is enabled |
+
+The simulated delay exists purely for the demo narrative and caps each
+replica at roughly 2 orders/second — **disable it for any load testing**:
+
+```bash
+SIMULATED_PROCESSING_DELAY_ENABLED=false \
+CONSUMING_PREFETCH_COUNT=64 CONSUMING_DISPATCH_CONCURRENCY=32 \
+  docker compose up --build
+```
+
+When running services locally (`dotnet run`), set the same values as
+plain environment variables, e.g. `Consuming__SimulatedProcessingDelayEnabled=false`.
 
 To return to the single-replica setup, re-comment the block and run
 `docker compose up -d --force-recreate`.

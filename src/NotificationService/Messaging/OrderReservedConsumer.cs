@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.Options;
 using NotificationService.Models;
 using NotificationService.Services;
 using RabbitMQ.Client;
@@ -9,8 +10,9 @@ namespace NotificationService.Messaging;
 public sealed class OrderReservedConsumer(
     IRabbitMqConnectionFactory connectionFactory,
     INotificationLog notificationLog,
+    IOptions<ConsumingOptions> consumingOptions,
     ILogger<OrderReservedConsumer> logger)
-    : RabbitMqConsumerBase(connectionFactory, logger)
+    : RabbitMqConsumerBase(connectionFactory, consumingOptions, logger)
 {
     protected override string QueueName => NotificationsTopology.OrderReservedQueue;
 

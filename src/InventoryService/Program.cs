@@ -13,6 +13,7 @@ builder.Services.AddSerilog(configuration => configuration
         "[{Timestamp:HH:mm:ss.fff} {Level:u3}] ({MachineName}) {Message:lj}{NewLine}{Exception}"));
 
 builder.Services.Configure<RabbitMqOptions>(builder.Configuration.GetSection("RabbitMq"));
+builder.Services.Configure<ConsumingOptions>(builder.Configuration.GetSection(ConsumingOptions.SectionName));
 builder.Services.AddSingleton<IRabbitMqConnectionFactory, RabbitMqConnectionFactory>();
 builder.Services.AddSingleton<IRabbitMqPublisher, RabbitMqPublisher>();
 builder.Services.AddSingleton<IStockTable, StockTable>();
