@@ -26,6 +26,14 @@ public sealed class ProcessedOrderTable : IProcessedOrderTable
         _keys = new HashSet<Guid>(capacity);
     }
 
+    public bool IsProcessed(Guid orderId)
+    {
+        lock (_lock)
+        {
+            return _keys.Contains(orderId);
+        }
+    }
+
     public bool TryMark(Guid orderId)
     {
         lock (_lock)

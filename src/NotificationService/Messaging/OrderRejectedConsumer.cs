@@ -41,7 +41,13 @@ public sealed class OrderRejectedConsumer(
             return;
         }
 
-        if (!processedEvents.TryMark(rejected.EventId))
+        // Idempotency tradeoff: the processed-event mark is written only
+        // AFTER the notification record is stored, not before. A crash in
+        // between can replay this delivery (duplicate log entry); marking
+        // first would instead suppress the replay and silently lose the
+        // notification. Losing a notification is the worse failure for this
+        // system, so the duplicate window is the accepted risk.
+        if (processedEvents.IsProcessed(rejected.EventId))
         {
             logger.LogInformation(
                 "Duplicate {EventType} event {EventId} (delivery tag {DeliveryTag}) already processed, acknowledging without recording",
@@ -63,6 +69,8 @@ public sealed class OrderRejectedConsumer(
             Quantity = 0,
             Reason = rejected.Reason,
         });
+
+        processedEvents.TryMark(rejected.EventId);
 
         await channel.BasicAckAsync(message.DeliveryTag, multiple: false, stoppingToken);
     }

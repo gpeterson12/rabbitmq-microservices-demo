@@ -26,6 +26,14 @@ public sealed class ProcessedEventTable : IProcessedEventTable
         _keys = new HashSet<Guid>(capacity);
     }
 
+    public bool IsProcessed(Guid eventId)
+    {
+        lock (_lock)
+        {
+            return _keys.Contains(eventId);
+        }
+    }
+
     public bool TryMark(Guid eventId)
     {
         lock (_lock)

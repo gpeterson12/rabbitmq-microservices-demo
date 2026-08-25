@@ -15,6 +15,32 @@ public class ProcessedOrderTableTests
     }
 
     [Fact]
+    public void IsProcessed_reflects_marked_order_ids()
+    {
+        var table = new ProcessedOrderTable();
+        var orderId = Guid.NewGuid();
+
+        Assert.False(table.IsProcessed(orderId));
+
+        table.TryMark(orderId);
+
+        Assert.True(table.IsProcessed(orderId));
+        Assert.False(table.IsProcessed(Guid.NewGuid()));
+    }
+
+    [Fact]
+    public void Evicted_entries_are_no_longer_considered_processed()
+    {
+        var table = new ProcessedOrderTable(capacity: 1);
+        var first = Guid.NewGuid();
+
+        table.TryMark(first);
+        table.TryMark(Guid.NewGuid());
+
+        Assert.False(table.IsProcessed(first));
+    }
+
+    [Fact]
     public void Distinct_order_ids_are_all_accepted()
     {
         var table = new ProcessedOrderTable();

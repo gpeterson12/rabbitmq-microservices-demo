@@ -176,7 +176,14 @@ public sealed class OrderCreatedConsumer(
             return;
         }
 
-        if (!processedOrders.TryMark(orderCreated.OrderId))
+        // Idempotency tradeoff: the processed-order mark is written only
+        // AFTER the outcome event is published, not before mutating state.
+        // A crash after reserve/publish but before the mark can replay this
+        // delivery (duplicate stock decrement and/or duplicate outcome);
+        // marking first would instead suppress the replay and silently lose
+        // the order outcome entirely. Losing an outcome is the worse failure
+        // for this system, so the duplicate window is the accepted risk.
+        if (processedOrders.IsProcessed(orderCreated.OrderId))
         {
             logger.LogInformation(
                 "Duplicate order.created for order {OrderId} (delivery tag {DeliveryTag}) already processed, acknowledging without reprocessing",
@@ -226,6 +233,8 @@ public sealed class OrderCreatedConsumer(
                     orderCreated.OrderId, reason, orderCreated.Sku, orderCreated.Quantity);
                 break;
         }
+
+        processedOrders.TryMark(orderCreated.OrderId);
 
         await channel.BasicAckAsync(message.DeliveryTag, multiple: false, stoppingToken);
     }

@@ -130,6 +130,11 @@ There are two distinct failure paths:
 - **Business rejection** (unknown SKU / insufficient stock): *not* an
   error. InventoryService publishes `order.rejected` and acks the
   original message. There is deliberately no saga/compensation logic.
+- **Redelivery replay** (crash between emitting an outcome/notification
+  and recording its processed-id mark): the delivery replays and can
+  produce a duplicate outcome or notification. Dedupe marks are
+  deliberately recorded only *after* the side effect succeeds — replay
+  duplicates are preferred over silently dropping an order outcome.
 
 ## Who declares what
 
