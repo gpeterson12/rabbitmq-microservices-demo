@@ -98,6 +98,9 @@ curl localhost:5002/stock
 
 # Notification records, most recent first
 curl localhost:5003/notifications
+
+# The log is a bounded ring buffer; page through it with limit/offset
+curl 'localhost:5003/notifications?limit=20&offset=0'
 ```
 
 Seed stock: `SKU-WIDGET` = 50, `SKU-GADGET` = 10, `SKU-GIZMO` = 0

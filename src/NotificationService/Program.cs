@@ -22,8 +22,21 @@ builder.Services.AddHostedService<OrderRejectedConsumer>();
 
 var app = builder.Build();
 
-app.MapGet("/notifications", (INotificationLog notificationLog) =>
-    Results.Ok(notificationLog.LatestFirst()));
+const int DefaultPageSize = 100;
+const int MaxPageSize = NotificationLog.DefaultCapacity;
+
+app.MapGet("/notifications", (INotificationLog notificationLog, int? limit, int? offset) =>
+{
+    var records = notificationLog.LatestFirst();
+    var skip = Math.Max(offset ?? 0, 0);
+    var take = Math.Clamp(limit ?? DefaultPageSize, 1, MaxPageSize);
+
+    return Results.Ok(new
+    {
+        total = records.Count,
+        items = records.Skip(skip).Take(take),
+    });
+});
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
