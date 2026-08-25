@@ -16,14 +16,20 @@ builder.Services.AddSerilog(configuration => configuration
 builder.Services.Configure<RabbitMqOptions>(builder.Configuration.GetSection("RabbitMq"));
 builder.Services.AddSingleton<IRabbitMqConnectionFactory, RabbitMqConnectionFactory>();
 builder.Services.AddSingleton<IRabbitMqPublisher, RabbitMqPublisher>();
+builder.Services.AddSingleton<RabbitMqReadinessGate>();
 builder.Services.AddHostedService<RabbitMqPublisherInitializer>();
 
 var app = builder.Build();
 
 app.MapPost("/orders", async (CreateOrderRequest? request, IRabbitMqPublisher publisher,
-    CancellationToken cancellationToken) =>
+    RabbitMqReadinessGate readiness, CancellationToken cancellationToken) =>
 {
-    var validationErrors = OrderRequestValidator.Validate(request);
+    if (!readiness.IsReady)
+    {
+        return Results.Problem(
+            title: $"Still connecting to RabbitMQ; retry {OrderCreatedEvent.EventTypeValue} shortly",
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }    var validationErrors = OrderRequestValidator.Validate(request);
     if (validationErrors.Count > 0)
     {
         return Results.BadRequest(new { errors = validationErrors });
@@ -70,8 +76,28 @@ app.MapGet("/health", (IRabbitMqPublisher publisher) => publisher.IsConnected
 
 app.Run();
 
-internal sealed class RabbitMqPublisherInitializer(IRabbitMqPublisher publisher) : BackgroundService
+internal sealed class RabbitMqReadinessGate
 {
-    protected override Task ExecuteAsync(CancellationToken stoppingToken) =>
-        publisher.InitializeAsync(stoppingToken);
+    private readonly TaskCompletionSource _tcs =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public bool IsReady => _tcs.Task.IsCompleted;
+
+    public void MarkReady() => _tcs.TrySetResult();
+}
+
+internal sealed class RabbitMqPublisherInitializer(IRabbitMqPublisher publisher,
+    RabbitMqReadinessGate readiness) : BackgroundService
+{
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        try
+        {
+            await publisher.InitializeAsync(stoppingToken);
+            readiness.MarkReady();
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+        }
+    }
 }

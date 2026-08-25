@@ -15,4 +15,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="OrderService.Tests" />
+  </ItemGroup>
+
 </Project>
